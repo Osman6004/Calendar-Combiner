@@ -1,14 +1,16 @@
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, HTMLResponse
 from pydantic import BaseModel
 import httpx
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 import json
 import secrets
 import time
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 app = FastAPI(title="Calendar Combiner")
 
@@ -133,6 +135,7 @@ class FreeBusyRequest(BaseModel):
     time_from: str = "09:00"
     time_to: str = "17:00"
     min_duration_minutes: int = 30
+    timezone: str = "UTC"
 
 
 @app.post("/find-overlaps")
@@ -164,7 +167,7 @@ async def find_overlaps(req: FreeBusyRequest):
                 end = datetime.fromisoformat(b["end"].replace("Z", "+00:00"))
                 all_busy.append((start, end))
 
-    slots = generate_slots(req.date_from, req.date_to, req.time_from, req.time_to, req.min_duration_minutes)
+    slots = generate_slots(req.date_from, req.date_to, req.time_from, req.time_to, req.min_duration_minutes, req.timezone)
     free_slots = [s for s in slots if not overlaps_any(s, all_busy)]
 
     return {
@@ -180,8 +183,12 @@ async def find_overlaps(req: FreeBusyRequest):
     }
 
 
-def generate_slots(date_from, date_to, time_from, time_to, duration_min):
+def generate_slots(date_from, date_to, time_from, time_to, duration_min, tz_name="UTC"):
     from datetime import timedelta, date
+    try:
+        tz = ZoneInfo(tz_name)
+    except ZoneInfoNotFoundError:
+        tz = timezone.utc
     slots = []
     fh, fm = map(int, time_from.split(":"))
     th, tm = map(int, time_to.split(":"))
@@ -191,13 +198,12 @@ def generate_slots(date_from, date_to, time_from, time_to, duration_min):
 
     while cur <= end:
         if cur.weekday() < 5:  # Mon-Fri
-            slot_start = datetime(cur.year, cur.month, cur.day, fh, fm, tzinfo=timezone.utc)
-            day_end = datetime(cur.year, cur.month, cur.day, th, tm, tzinfo=timezone.utc)
+            slot_start = datetime(cur.year, cur.month, cur.day, fh, fm, tzinfo=tz)
+            day_end = datetime(cur.year, cur.month, cur.day, th, tm, tzinfo=tz)
             while slot_start + delta <= day_end:
                 slots.append((slot_start, slot_start + delta))
                 slot_start += delta
-        from datetime import timedelta as td
-        cur = cur + td(days=1)
+        cur = cur + timedelta(days=1)
     return slots
 
 
