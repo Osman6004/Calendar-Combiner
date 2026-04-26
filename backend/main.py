@@ -1,4 +1,3 @@
-
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, HTMLResponse
@@ -11,14 +10,14 @@ import json
 import secrets
 import time
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-
+ 
 app = FastAPI(title="Calendar Combiner")
-
+ 
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
 GOOGLE_CLIENT_SECRET = os.environ["GOOGLE_CLIENT_SECRET"]
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
 BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000")
-
+ 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[FRONTEND_URL, "http://localhost:5173", "http://localhost:3000"],
@@ -26,24 +25,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# In-memory session store (use Redis in production)
+ 
 sessions: dict[str, dict] = {}
-
+ 
 SCOPES = "https://www.googleapis.com/auth/calendar.freebusy https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile"
-
-
+ 
+ 
 @app.get("/health")
 def health():
     return {"status": "ok"}
-
-
+ 
+ 
 @app.get("/auth/login")
 def login(session_id: str, participant_index: int = 0):
     state = json.dumps({"session_id": session_id, "participant_index": participant_index})
     import base64
     state_b64 = base64.urlsafe_b64encode(state.encode()).decode()
-
     redirect_uri = f"{BACKEND_URL}/auth/callback"
     url = (
         f"https://accounts.google.com/o/oauth2/v2/auth"
@@ -56,8 +53,8 @@ def login(session_id: str, participant_index: int = 0):
         f"&prompt=select_account"
     )
     return RedirectResponse(url)
-
-
+ 
+ 
 @app.get("/auth/callback")
 async def callback(code: str, state: str):
     import base64
@@ -67,7 +64,7 @@ async def callback(code: str, state: str):
         participant_index = state_data["participant_index"]
     except Exception:
         raise HTTPException(400, "Invalid state")
-
+ 
     redirect_uri = f"{BACKEND_URL}/auth/callback"
     async with httpx.AsyncClient() as client:
         token_resp = await client.post(
@@ -83,18 +80,18 @@ async def callback(code: str, state: str):
         tokens = token_resp.json()
         if "error" in tokens:
             raise HTTPException(400, tokens["error"])
-
+ 
         access_token = tokens["access_token"]
-
+ 
         user_resp = await client.get(
             "https://www.googleapis.com/oauth2/v2/userinfo",
             headers={"Authorization": f"Bearer {access_token}"},
         )
         user_info = user_resp.json()
-
+ 
     if session_id not in sessions:
         sessions[session_id] = {"participants": {}}
-
+ 
     sessions[session_id]["participants"][str(participant_index)] = {
         "access_token": access_token,
         "name": user_info.get("given_name") or user_info.get("name", f"Person {participant_index + 1}"),
@@ -102,7 +99,7 @@ async def callback(code: str, state: str):
         "picture": user_info.get("picture", ""),
         "connected_at": time.time(),
     }
-
+ 
     return HTMLResponse(f"""
         <html><head><title>Connected!</title></head>
         <body style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f9f9f9;">
@@ -112,13 +109,11 @@ async def callback(code: str, state: str):
             <p style="color:#666;margin:0 0 16px;">Signed in as <strong>{user_info.get('email','')}</strong></p>
             <p style="color:#999;font-size:13px;">You can close this tab and return to Calendar Combiner.</p>
         </div>
-        <script>
-            setTimeout(() => window.close(), 2000);
-        </script>
+        <script>setTimeout(() => window.close(), 2000);</script>
         </body></html>
     """)
-
-
+ 
+ 
 @app.get("/session/{session_id}")
 def get_session(session_id: str):
     session = sessions.get(session_id, {"participants": {}})
@@ -126,8 +121,16 @@ def get_session(session_id: str):
     for idx, p in session.get("participants", {}).items():
         safe[idx] = {"name": p["name"], "email": p["email"], "picture": p["picture"]}
     return {"participants": safe}
-
-
+ 
+ 
+@app.delete("/session/{session_id}/participant/{participant_index}")
+def remove_participant(session_id: str, participant_index: int):
+    session = sessions.get(session_id)
+    if session:
+        session["participants"].pop(str(participant_index), None)
+    return {"ok": True}
+ 
+ 
 class FreeBusyRequest(BaseModel):
     session_id: str
     date_from: str
@@ -136,19 +139,19 @@ class FreeBusyRequest(BaseModel):
     time_to: str = "17:00"
     min_duration_minutes: int = 30
     timezone: str = "UTC"
-
-
+ 
+ 
 @app.post("/find-overlaps")
 async def find_overlaps(req: FreeBusyRequest):
     session = sessions.get(req.session_id)
     if not session or len(session.get("participants", {})) < 2:
         raise HTTPException(400, "Need at least 2 connected participants")
-
+ 
     time_min = f"{req.date_from}T00:00:00Z"
     time_max = f"{req.date_to}T23:59:59Z"
-
+ 
     all_busy: list[tuple[datetime, datetime]] = []
-
+ 
     async with httpx.AsyncClient() as client:
         for idx, p in session["participants"].items():
             resp = await client.post(
@@ -166,10 +169,10 @@ async def find_overlaps(req: FreeBusyRequest):
                 start = datetime.fromisoformat(b["start"].replace("Z", "+00:00"))
                 end = datetime.fromisoformat(b["end"].replace("Z", "+00:00"))
                 all_busy.append((start, end))
-
+ 
     slots = generate_slots(req.date_from, req.date_to, req.time_from, req.time_to, req.min_duration_minutes, req.timezone)
     free_slots = [s for s in slots if not overlaps_any(s, all_busy)]
-
+ 
     return {
         "slots": [
             {
@@ -181,8 +184,8 @@ async def find_overlaps(req: FreeBusyRequest):
         ],
         "total": len(free_slots),
     }
-
-
+ 
+ 
 def generate_slots(date_from, date_to, time_from, time_to, duration_min, tz_name="UTC"):
     from datetime import timedelta, date
     try:
@@ -195,9 +198,9 @@ def generate_slots(date_from, date_to, time_from, time_to, duration_min, tz_name
     cur = date.fromisoformat(date_from)
     end = date.fromisoformat(date_to)
     delta = timedelta(minutes=duration_min)
-
+ 
     while cur <= end:
-        if cur.weekday() < 5:  # Mon-Fri
+        if cur.weekday() < 5:
             slot_start = datetime(cur.year, cur.month, cur.day, fh, fm, tzinfo=tz)
             day_end = datetime(cur.year, cur.month, cur.day, th, tm, tzinfo=tz)
             while slot_start + delta <= day_end:
@@ -205,11 +208,12 @@ def generate_slots(date_from, date_to, time_from, time_to, duration_min, tz_name
                 slot_start += delta
         cur = cur + timedelta(days=1)
     return slots
-
-
+ 
+ 
 def overlaps_any(slot, busy_list):
     s_start, s_end = slot
     for b_start, b_end in busy_list:
         if s_start < b_end and s_end > b_start:
             return True
     return False
+ 
