@@ -1,0 +1,213 @@
+import { useState, useEffect, useCallback } from 'react'
+import './App.css'
+
+const API = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+
+function getOrCreateSessionId() {
+  const params = new URLSearchParams(window.location.search)
+  let sid = params.get('session') || localStorage.getItem('calendar_session_id')
+  if (!sid) {
+    sid = crypto.randomUUID()
+    localStorage.setItem('calendar_session_id', sid)
+  }
+  return sid
+}
+
+const SESSION_ID = getOrCreateSessionId()
+
+function Avatar({ name, email, index }) {
+  const colors = [
+    { bg: '#dbeafe', text: '#1d4ed8' },
+    { bg: '#dcfce7', text: '#15803d' },
+    { bg: '#fef3c7', text: '#b45309' },
+  ]
+  const c = colors[index % colors.length]
+  const initials = name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
+  return (
+    <div style={{ width: 38, height: 38, borderRadius: '50%', background: c.bg, color: c.text, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 500, fontSize: 13, flexShrink: 0 }}>
+      {initials}
+    </div>
+  )
+}
+
+export default function App() {
+  const [participants, setParticipants] = useState({})
+  const [participantCount, setParticipantCount] = useState(2)
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+  const [timeFrom, setTimeFrom] = useState('09:00')
+  const [timeTo, setTimeTo] = useState('17:00')
+  const [duration, setDuration] = useState(30)
+  const [slots, setSlots] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [shareVisible, setShareVisible] = useState(false)
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    const today = new Date()
+    const next = new Date()
+    next.setDate(today.getDate() + 7)
+    setDateFrom(today.toISOString().split('T')[0])
+    setDateTo(next.toISOString().split('T')[0])
+  }, [])
+
+  const fetchSession = useCallback(async () => {
+    try {
+      const r = await fetch(`${API}/session/${SESSION_ID}`)
+      const data = await r.json()
+      setParticipants(data.participants || {})
+    } catch {}
+  }, [])
+
+  useEffect(() => {
+    fetchSession()
+    const interval = setInterval(fetchSession, 3000)
+    return () => clearInterval(interval)
+  }, [fetchSession])
+
+  function connectCalendar(index) {
+    const url = `${API}/auth/login?session_id=${SESSION_ID}&participant_index=${index}`
+    window.open(url, 'google-auth', 'width=520,height=620,left=200,top=80')
+  }
+
+  async function findOverlaps() {
+    setError('')
+    if (Object.keys(participants).length < 2) {
+      setError('Connect at least 2 calendars first.')
+      return
+    }
+    if (!dateFrom || !dateTo) {
+      setError('Select a date range.')
+      return
+    }
+    setLoading(true)
+    try {
+      const r = await fetch(`${API}/find-overlaps`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: SESSION_ID,
+          date_from: dateFrom,
+          date_to: dateTo,
+          time_from: timeFrom,
+          time_to: timeTo,
+          min_duration_minutes: duration,
+        }),
+      })
+      const data = await r.json()
+      if (!r.ok) throw new Error(data.detail || 'Error finding overlaps')
+      setSlots(data.slots)
+    } catch (e) {
+      setError(e.message)
+    }
+    setLoading(false)
+  }
+
+  function getShareLink() {
+    const url = new URL(window.location.href)
+    url.searchParams.set('session', SESSION_ID)
+    return url.toString()
+  }
+
+  function copyShareLink() {
+    navigator.clipboard.writeText(getShareLink()).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }
+
+  function openLettuceMeet() {
+    window.open('https://lettucemeet.com/', '_blank')
+    if (slots?.length) {
+      const dates = [...new Set(slots.map(s => s.start.split('T')[0]))]
+      setTimeout(() => alert(`Add these dates in LettuceMeet:\n\n${dates.join('\n')}`), 500)
+    }
+  }
+
+  const participantArr = Array.from({ length: participantCount }, (_, i) => ({
+    index: i,
+    data: participants[String(i)] || null,
+  }))
+
+  return (
+    <div className="page">
+      <div className="card">
+        <div className="header">
+          <h1>Calendar combiner</h1>
+          <p>Find when everyone is free — connect Google Calendars, pick a range, see the gaps.</p>
+        </div>
+
+        <section>
+          <div className="section-label">Participants</div>
+          <div className="participants">
+            {participantArr.map(({ index, data }) => (
+              <div className="participant-row" key={index}>
+                {data
+                  ? <Avatar name={data.name} email={data.email} index={index} />
+                  : <div className="avatar-placeholder">{index + 1}</div>
+                }
+                <div className="participant-info">
+                  <div className="participant-name">{data ? data.name : index === 0 ? 'You' : `Person ${index + 1}`}</div>
+                  <div className="participant-sub">{data ? data.email : 'Not connected'}</div>
+                </div>
+                {data
+                  ? <span className="badge-connected">Connected</span>
+                  : <button className="btn-outline" onClick={() => connectCalendar(index)}>Connect calendar</button>
+                }
+              </div>
+            ))}
+          </div>
+          {participantCount < 3 && (
+            <button className="btn-add" onClick={() => setParticipantCount(3)}>+ Add a third person</button>
+          )}
+        </section>
+
+        <section>
+          <div className="section-label">Date range</div>
+          <div className="row-2">
+            <div className="field">
+              <label>From</label>
+              <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
+            </div>
+            <div className="field">
+              <label>To</label>
+              <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} />
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <div className="section-label">Working hours</div>
+          <div className="row-2">
+            <div className="field">
+              <label>Start</label>
+              <input type="time" value={timeFrom} onChange={e => setTimeFrom(e.target.value)} />
+            </div>
+            <div className="field">
+              <label>End</label>
+              <input type="time" value={timeTo} onChange={e => setTimeTo(e.target.value)} />
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <div className="section-label">Minimum slot duration</div>
+          <div className="row-2">
+            {[15, 30, 45, 60].map(d => (
+              <button
+                key={d}
+                className={`btn-pill ${duration === d ? 'active' : ''}`}
+                onClick={() => setDuration(d)}
+              >{d} min</button>
+            ))}
+          </div>
+        </section>
+
+        {error && <div className="error-msg">{error}</div>}
+
+        <div className="actions">
+          <button className="btn-primary" onClick={findOverlaps} disabled={loading}>
+            {loading ? 'Finding...' : 'Find overlapping times'}
+          </button>
+          <button className="btn-secondary" onClick={() => setShareVisible(v
