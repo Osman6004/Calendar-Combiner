@@ -67,7 +67,7 @@ export default function App() {
       const r = await fetch(`${API}/find-overlaps`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: SESSION_ID, date_from: dateFrom, date_to: dateTo, time_from: timeFrom, time_to: timeTo, min_duration_minutes: duration }),
+        body: JSON.stringify({ session_id: SESSION_ID, date_from: dateFrom, date_to: dateTo, time_from: timeFrom, time_to: timeTo, min_duration_minutes: duration, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone }),
       })
       const data = await r.json()
       if (!r.ok) throw new Error(data.detail || 'Error finding overlaps')
