@@ -58,6 +58,17 @@ export default function App() {
     window.open(url, 'google-auth', 'width=520,height=620,left=200,top=80')
   }
 
+  async function removeParticipant(index) {
+    try {
+      await fetch(`${API}/session/${SESSION_ID}/participant/${index}`, { method: 'DELETE' })
+    } catch {}
+    setParticipants(prev => {
+      const updated = { ...prev }
+      delete updated[String(index)]
+      return updated
+    })
+  }
+
   async function findOverlaps() {
     setError('')
     if (Object.keys(participants).length < 2) { setError('Connect at least 2 calendars first.'); return }
@@ -95,7 +106,8 @@ export default function App() {
   }
 
   const participantArr = Array.from({ length: participantCount }, (_, i) => ({ index: i, data: participants[String(i)] || null }))
-return (
+
+  return (
     <div className="page">
       <div className="card">
         <div className="header">
@@ -112,7 +124,10 @@ return (
                   <div className="participant-name">{data ? data.name : index === 0 ? 'You' : `Person ${index + 1}`}</div>
                   <div className="participant-sub">{data ? data.email : 'Not connected'}</div>
                 </div>
-                {data ? <span className="badge-connected">Connected</span> : <button className="btn-outline" onClick={() => connectCalendar(index)}>Connect calendar</button>}
+                {data
+                  ? <button className="btn-outline" style={{ color: '#b91c1c', borderColor: '#fecaca' }} onClick={() => removeParticipant(index)}>Remove</button>
+                  : <button className="btn-outline" onClick={() => connectCalendar(index)}>Connect calendar</button>
+                }
               </div>
             ))}
           </div>
@@ -183,8 +198,3 @@ return (
     </div>
   )
 }
-
-
-
-
-
